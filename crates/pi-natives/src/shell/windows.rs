@@ -72,7 +72,7 @@ pub fn run_native_shell(
 	let stdout_handle = stdout.map(|out| {
 		thread::spawn(move || {
 			let reader = BufReader::new(out);
-			for line in reader.lines().flatten() {
+			for line in reader.lines().map_while(|r| r.ok()) {
 				on_output_stdout(&format!("{line}\n"));
 			}
 		})
@@ -82,7 +82,7 @@ pub fn run_native_shell(
 	let stderr_handle = stderr.map(|err| {
 		thread::spawn(move || {
 			let reader = BufReader::new(err);
-			for line in reader.lines().flatten() {
+			for line in reader.lines().map_while(|r| r.ok()) {
 				on_output_stderr(&format!("{line}\n"));
 			}
 		})

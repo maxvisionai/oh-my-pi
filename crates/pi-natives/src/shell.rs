@@ -25,11 +25,13 @@ use std::{
 mod windows;
 
 use brush_builtins::{BuiltinSet, default_builtins};
+#[cfg(not(windows))]
+use brush_core::openfiles;
 use brush_core::{
 	CreateOptions, ExecutionContext, ExecutionControlFlow, ExecutionExitCode, ExecutionResult,
 	ProcessGroupPolicy, Shell as BrushShell, ShellValue, ShellVariable, builtins,
 	env::EnvironmentScope,
-	openfiles::{self, OpenFile, OpenFiles},
+	openfiles::{OpenFile, OpenFiles},
 };
 use clap::Parser;
 use napi::{
@@ -54,7 +56,7 @@ struct ShellSessionCore {
 struct ShellConfig {
 	session_env:   Option<HashMap<String, String>>,
 	snapshot_path: Option<String>,
-	/// Path to shell binary (Windows only). When set, bypasses BrushShell.
+	/// Path to shell binary (Windows only). When set, bypasses `BrushShell`.
 	shell_path:    Option<String>,
 }
 
@@ -65,7 +67,7 @@ pub struct ShellOptions {
 	pub session_env:   Option<HashMap<String, String>>,
 	/// Optional snapshot file to source on session creation.
 	pub snapshot_path: Option<String>,
-	/// Path to shell binary (Windows only). When set, bypasses BrushShell
+	/// Path to shell binary (Windows only). When set, bypasses `BrushShell`
 	/// and spawns the native shell directly, avoiding PATH resolution issues.
 	pub shell_path:    Option<String>,
 }
@@ -243,7 +245,7 @@ pub struct ShellExecuteOptions<'env> {
 	/// Optional snapshot file to source on session creation.
 	#[napi(js_name = "snapshotPath")]
 	pub snapshot_path: Option<String>,
-	/// Path to shell binary (Windows only). When set, bypasses BrushShell.
+	/// Path to shell binary (Windows only). When set, bypasses `BrushShell`.
 	#[napi(js_name = "shellPath")]
 	pub shell_path:    Option<String>,
 	/// Abort signal for cancelling the operation.
