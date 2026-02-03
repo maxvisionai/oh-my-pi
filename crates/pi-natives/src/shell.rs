@@ -29,7 +29,7 @@ use brush_core::{
 	CreateOptions, ExecutionContext, ExecutionControlFlow, ExecutionExitCode, ExecutionResult,
 	ProcessGroupPolicy, Shell as BrushShell, ShellValue, ShellVariable, builtins,
 	env::EnvironmentScope,
-	openfiles::{self, OpenFile, OpenFiles},
+	openfiles::{OpenFile, OpenFiles},
 };
 use clap::Parser;
 use napi::{
@@ -41,28 +41,33 @@ use napi_derive::napi;
 use tokio::io::AsyncReadExt as _;
 use tokio_util::sync::CancellationToken;
 #[cfg(windows)]
-use windows::configure_windows_path;
+use windows::{configure_windows_path, run_native_shell};
 
 use crate::task;
 
 struct ShellSessionCore {
-	shell:         BrushShell,
+	shell: BrushShell,
 	current_abort: Option<task::AbortToken>,
 }
 
 #[derive(Clone)]
 struct ShellConfig {
-	session_env:   Option<HashMap<String, String>>,
+	session_env: Option<HashMap<String, String>>,
 	snapshot_path: Option<String>,
+	/// Path to shell binary (Windows only). When set, bypasses BrushShell.
+	shell_path: Option<String>,
 }
 
 /// Options for configuring a persistent shell session.
 #[napi(object)]
 pub struct ShellOptions {
 	/// Environment variables to apply once per session.
-	pub session_env:   Option<HashMap<String, String>>,
+	pub session_env: Option<HashMap<String, String>>,
 	/// Optional snapshot file to source on session creation.
 	pub snapshot_path: Option<String>,
+	/// Path to shell binary (Windows only). When set, bypasses BrushShell
+	/// and spawns the native shell directly, avoiding PATH resolution issues.
+	pub shell_path: Option<String>,
 }
 
 /// Options for running a shell command (internal, lifetime-free).
@@ -70,25 +75,25 @@ struct ShellRunConfig {
 	/// Command string to execute in the shell.
 	command: String,
 	/// Working directory for the command.
-	cwd:     Option<String>,
+	cwd: Option<String>,
 	/// Environment variables to apply for this command only.
-	env:     Option<HashMap<String, String>>,
+	env: Option<HashMap<String, String>>,
 }
 
 /// Options for running a shell command.
 #[napi(object)]
 pub struct ShellRunOptions<'env> {
 	/// Command string to execute in the shell.
-	pub command:    String,
+	pub command: String,
 	/// Working directory for the command.
-	pub cwd:        Option<String>,
+	pub cwd: Option<String>,
 	/// Environment variables to apply for this command only.
-	pub env:        Option<HashMap<String, String>>,
+	pub env: Option<HashMap<String, String>>,
 	/// Timeout in milliseconds before cancelling the command.
 	#[napi(js_name = "timeoutMs")]
 	pub timeout_ms: Option<u32>,
 	/// Abort signal for cancelling the operation.
-	pub signal:     Option<Unknown<'env>>,
+	pub signal: Option<Unknown<'env>>,
 }
 
 /// Result of running a shell command.
@@ -106,7 +111,7 @@ pub struct ShellRunResult {
 #[napi]
 pub struct Shell {
 	session: Arc<TokioMutex<Option<ShellSessionCore>>>,
-	config:  ShellConfig,
+	config: ShellConfig,
 }
 
 #[napi]
@@ -117,8 +122,12 @@ impl Shell {
 	/// The options set session-scoped environment variables and a snapshot path.
 	pub fn new(options: Option<ShellOptions>) -> Self {
 		let config = options.map_or_else(
-			|| ShellConfig { session_env: None, snapshot_path: None },
-			|opt| ShellConfig { session_env: opt.session_env, snapshot_path: opt.snapshot_path },
+			|| ShellConfig { session_env: None, snapshot_path: None, shell_path: None },
+			|opt| ShellConfig {
+				session_env: opt.session_env,
+				snapshot_path: opt.snapshot_path,
+				shell_path: opt.shell_path,
+			},
 		);
 		Self { session: Arc::new(TokioMutex::new(None)), config }
 	}
@@ -171,6 +180,12 @@ async fn run_shell_session(
 	on_chunk: Option<ThreadsafeFunction<String>>,
 	mut ct: task::CancelToken,
 ) -> Result<ShellRunResult> {
+	// On Windows, if shell_path is provided, use native shell execution
+	#[cfg(windows)]
+	if let Some(ref shell_path) = config.shell_path {
+		return run_native_shell_session(shell_path, &config, &run_config, on_chunk, ct).await;
+	}
+
 	let tokio_cancel = CancellationToken::new();
 
 	let mut run_task = tokio::spawn({
@@ -215,21 +230,24 @@ async fn run_shell_session(
 #[napi(object)]
 pub struct ShellExecuteOptions<'env> {
 	/// Command string to execute in the shell.
-	pub command:       String,
+	pub command: String,
 	/// Working directory for the command.
-	pub cwd:           Option<String>,
+	pub cwd: Option<String>,
 	/// Environment variables to apply for this command only.
-	pub env:           Option<HashMap<String, String>>,
+	pub env: Option<HashMap<String, String>>,
 	/// Environment variables to apply once per session.
-	pub session_env:   Option<HashMap<String, String>>,
+	pub session_env: Option<HashMap<String, String>>,
 	/// Timeout in milliseconds before cancelling the command.
 	#[napi(js_name = "timeoutMs")]
-	pub timeout_ms:    Option<u32>,
+	pub timeout_ms: Option<u32>,
 	/// Optional snapshot file to source on session creation.
 	#[napi(js_name = "snapshotPath")]
 	pub snapshot_path: Option<String>,
+	/// Path to shell binary (Windows only). When set, bypasses BrushShell.
+	#[napi(js_name = "shellPath")]
+	pub shell_path: Option<String>,
 	/// Abort signal for cancelling the operation.
-	pub signal:        Option<Unknown<'env>>,
+	pub signal: Option<Unknown<'env>>,
 }
 
 /// Result of executing a shell command via brush-core.
@@ -256,11 +274,12 @@ pub fn execute_shell<'env>(
 		ThreadsafeFunction<String>,
 	>,
 ) -> Result<PromiseRaw<'env, ShellExecuteResult>> {
-	let config =
-		ShellConfig { session_env: options.session_env, snapshot_path: options.snapshot_path };
-	let run_config =
-		ShellRunConfig { command: options.command, cwd: options.cwd, env: options.env };
-
+	let config = ShellConfig {
+		session_env: options.session_env,
+		snapshot_path: options.snapshot_path,
+		shell_path: options.shell_path,
+	};
+	let run_config = ShellRunConfig { command: options.command, cwd: options.cwd, env: options.env };
 	let ct = task::CancelToken::new(options.timeout_ms, options.signal);
 	task::future(env, "shell.execute", async move {
 		run_shell_oneshot(config, run_config, on_chunk, ct).await
@@ -274,6 +293,12 @@ async fn run_shell_oneshot(
 	on_chunk: Option<ThreadsafeFunction<String>>,
 	ct: task::CancelToken,
 ) -> Result<ShellExecuteResult> {
+	// On Windows, if shell_path is provided, use native shell execution
+	#[cfg(windows)]
+	if let Some(ref shell_path) = config.shell_path {
+		return run_native_shell_oneshot(shell_path, &config, &run_config, on_chunk, ct).await;
+	}
+
 	let tokio_cancel = CancellationToken::new();
 
 	let mut task = tokio::spawn({
@@ -302,8 +327,122 @@ async fn run_shell_oneshot(
 	Ok(ShellExecuteResult { exit_code: Some(exit_code(&res?)), cancelled: false, timed_out: false })
 }
 
+/// Run a shell command using the native shell binary (Windows only).
+#[cfg(windows)]
+async fn run_native_shell_session(
+	shell_path: &str,
+	config: &ShellConfig,
+	run_config: &ShellRunConfig,
+	on_chunk: Option<ThreadsafeFunction<String>>,
+	ct: task::CancelToken,
+) -> Result<ShellRunResult> {
+	let shell_path = shell_path.to_string();
+	let command = run_config.command.clone();
+	let cwd = run_config.cwd.clone();
+	let env = run_config.env.clone();
+	let session_env = config.session_env.clone();
+
+	let task = tokio::task::spawn_blocking(move || {
+		run_native_shell(
+			&shell_path,
+			&command,
+			cwd.as_deref(),
+			env.as_ref(),
+			session_env.as_ref(),
+			move |chunk| {
+				if let Some(ref cb) = on_chunk {
+					cb.call(Ok(chunk.to_string()), ThreadsafeFunctionCallMode::NonBlocking);
+				}
+			},
+		)
+	});
+
+	tokio::select! {
+		result = task => {
+			let res = result.map_err(|e| Error::from_reason(format!("Shell task panicked: {e}")))?;
+			let native_result = res?;
+			Ok(ShellRunResult {
+				exit_code: native_result.exit_code,
+				cancelled: native_result.cancelled,
+				timed_out: native_result.timed_out,
+			})
+		}
+		reason = ct.wait() => {
+			Ok(ShellRunResult {
+				exit_code: None,
+				cancelled: matches!(reason, task::AbortReason::Signal),
+				timed_out: matches!(reason, task::AbortReason::Timeout),
+			})
+		}
+	}
+}
+
+/// Run a shell command using the native shell binary (Windows only).
+#[cfg(windows)]
+async fn run_native_shell_oneshot(
+	shell_path: &str,
+	config: &ShellConfig,
+	run_config: &ShellRunConfig,
+	on_chunk: Option<ThreadsafeFunction<String>>,
+	ct: task::CancelToken,
+) -> Result<ShellExecuteResult> {
+	let shell_path = shell_path.to_string();
+	let command = run_config.command.clone();
+	let cwd = run_config.cwd.clone();
+	let env = run_config.env.clone();
+	let session_env = config.session_env.clone();
+
+	let task = tokio::task::spawn_blocking(move || {
+		run_native_shell(
+			&shell_path,
+			&command,
+			cwd.as_deref(),
+			env.as_ref(),
+			session_env.as_ref(),
+			move |chunk| {
+				if let Some(ref cb) = on_chunk {
+					cb.call(Ok(chunk.to_string()), ThreadsafeFunctionCallMode::NonBlocking);
+				}
+			},
+		)
+	});
+
+	tokio::select! {
+		result = task => {
+			let res = result.map_err(|e| Error::from_reason(format!("Shell task panicked: {e}")))?;
+			let native_result = res?;
+			Ok(ShellExecuteResult {
+				exit_code: native_result.exit_code,
+				cancelled: native_result.cancelled,
+				timed_out: native_result.timed_out,
+			})
+		}
+		reason = ct.wait() => {
+			Ok(ShellExecuteResult {
+				exit_code: None,
+				cancelled: matches!(reason, task::AbortReason::Signal),
+				timed_out: matches!(reason, task::AbortReason::Timeout),
+			})
+		}
+	}
+}
+
 fn null_file() -> Result<OpenFile> {
-	openfiles::null().map_err(|err| Error::from_reason(format!("Failed to create null file: {err}")))
+	#[cfg(windows)]
+	{
+		use std::fs::OpenOptions;
+		let file = OpenOptions::new()
+			.read(true)
+			.write(true)
+			.open("NUL")
+			.map_err(|err| Error::from_reason(format!("Failed to open NUL: {err}")))?;
+		Ok(OpenFile::from(file))
+	}
+	#[cfg(not(windows))]
+	{
+		openfiles::null()
+			.map_err(|err| Error::from_reason(format!("Failed to create null file: {err}")))
+	}
 }
 
 const fn exit_code(result: &ExecutionResult) -> i32 {
@@ -685,7 +824,7 @@ struct TimeoutCommand {
 	#[arg(required = true)]
 	duration: String,
 	#[arg(required = true, num_args = 1.., trailing_var_arg = true)]
-	command:  Vec<String>,
+	command: Vec<String>,
 }
 
 impl builtins::Command for TimeoutCommand {

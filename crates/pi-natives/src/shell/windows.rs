@@ -1,8 +1,106 @@
-use std::{path::Path, process::Command};
+use std::{
+	collections::HashMap,
+	io::{BufRead, BufReader},
+	path::Path,
+	process::{Command, Stdio},
+	sync::Arc,
+	thread,
+};
 
 use brush_core::{Shell as BrushShell, ShellValue, ShellVariable};
 use napi::{Error, Result};
 use winreg::{RegKey, enums::HKEY_LOCAL_MACHINE};
+
+/// Result of running a command via native shell.
+pub struct NativeShellResult {
+	pub exit_code: Option<i32>,
+	pub cancelled: bool,
+	pub timed_out: bool,
+}
+
+/// Run a command via the native shell binary (bash.exe, etc.).
+///
+/// This bypasses BrushShell entirely, spawning the real shell binary and
+/// piping stdout/stderr back via the callback. This avoids BrushShell's
+/// Windows PATH resolution issues.
+pub fn run_native_shell(
+	shell_path: &str,
+	command: &str,
+	cwd: Option<&str>,
+	env: Option<&HashMap<String, String>>,
+	session_env: Option<&HashMap<String, String>>,
+	on_output: impl Fn(&str) + Send + Sync + 'static,
+) -> Result<NativeShellResult> {
+	let mut cmd = Command::new(shell_path);
+	cmd.args(["-l", "-c", command]);
+
+	if let Some(dir) = cwd {
+		cmd.current_dir(dir);
+	}
+
+	// Inherit and extend environment
+	cmd.env_clear();
+	for (key, value) in std::env::vars() {
+		cmd.env(&key, &value);
+	}
+	if let Some(env_map) = session_env {
+		for (key, value) in env_map {
+			cmd.env(key, value);
+		}
+	}
+	if let Some(env_map) = env {
+		for (key, value) in env_map {
+			cmd.env(key, value);
+		}
+	}
+
+	cmd.stdin(Stdio::null());
+	cmd.stdout(Stdio::piped());
+	cmd.stderr(Stdio::piped());
+
+	let mut child = cmd
+		.spawn()
+		.map_err(|e| Error::from_reason(format!("Failed to spawn shell: {e}")))?;
+
+	let stdout = child.stdout.take();
+	let stderr = child.stderr.take();
+
+	// Share callback between reader threads
+	let on_output = Arc::new(on_output);
+
+	let on_output_stdout = Arc::clone(&on_output);
+	let stdout_handle = stdout.map(|out| {
+		thread::spawn(move || {
+			let reader = BufReader::new(out);
+			for line in reader.lines().flatten() {
+				on_output_stdout(&format!("{line}\n"));
+			}
+		})
+	});
+
+	let on_output_stderr = Arc::clone(&on_output);
+	let stderr_handle = stderr.map(|err| {
+		thread::spawn(move || {
+			let reader = BufReader::new(err);
+			for line in reader.lines().flatten() {
+				on_output_stderr(&format!("{line}\n"));
+			}
+		})
+	});
+
+	let status = child
+		.wait()
+		.map_err(|e| Error::from_reason(format!("Failed to wait for shell: {e}")))?;
+
+	if let Some(h) = stdout_handle {
+		let _ = h.join();
+	}
+	if let Some(h) = stderr_handle {
+		let _ = h.join();
+	}
+
+	Ok(NativeShellResult { exit_code: status.code(), cancelled: false, timed_out: false })
+}
 
 pub fn configure_windows_path(shell: &mut BrushShell) -> Result<()> {
 	let Some(git_usr_bin) = find_git_usr_bin() else {

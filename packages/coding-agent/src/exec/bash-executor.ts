@@ -69,7 +69,13 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 		const sessionKey = buildSessionKey(shell, prefix, snapshotPath, shellEnv, options?.sessionKey);
 		let shellSession = shellSessions.get(sessionKey);
 		if (!shellSession) {
-			shellSession = new Shell({ sessionEnv: shellEnv, snapshotPath: snapshotPath ?? undefined });
+			// On Windows, pass shell path to bypass BrushShell and use native bash
+			const isWindows = process.platform === "win32";
+			shellSession = new Shell({
+				sessionEnv: shellEnv,
+				snapshotPath: snapshotPath ?? undefined,
+				shellPath: isWindows ? shell : undefined,
+			});
 			shellSessions.set(sessionKey, shellSession);
 		}
 

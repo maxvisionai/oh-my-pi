@@ -12,6 +12,8 @@ export interface ShellOptions {
 	sessionEnv?: Record<string, string>;
 	/** Optional snapshot path to source for bash sessions. */
 	snapshotPath?: string;
+	/** Path to shell binary (Windows only). When set, bypasses BrushShell. */
+	shellPath?: string;
 }
 
 /**
@@ -52,6 +54,8 @@ export interface ShellExecuteOptions extends Cancellable {
 	sessionEnv?: Record<string, string>;
 	/** Optional snapshot path to source for bash sessions. */
 	snapshotPath?: string;
+	/** Path to shell binary (Windows only). When set, bypasses BrushShell. */
+	shellPath?: string;
 }
 
 /**
