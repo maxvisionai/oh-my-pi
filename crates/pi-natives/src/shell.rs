@@ -29,7 +29,7 @@ use brush_core::{
 	CreateOptions, ExecutionContext, ExecutionControlFlow, ExecutionExitCode, ExecutionResult,
 	ProcessGroupPolicy, Shell as BrushShell, ShellValue, ShellVariable, builtins,
 	env::EnvironmentScope,
-	openfiles::{OpenFile, OpenFiles},
+	openfiles::{self, OpenFile, OpenFiles},
 };
 use clap::Parser;
 use napi::{
