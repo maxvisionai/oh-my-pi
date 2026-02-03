@@ -46,28 +46,28 @@ use windows::{configure_windows_path, run_native_shell};
 use crate::task;
 
 struct ShellSessionCore {
-	shell: BrushShell,
+	shell:         BrushShell,
 	current_abort: Option<task::AbortToken>,
 }
 
 #[derive(Clone)]
 struct ShellConfig {
-	session_env: Option<HashMap<String, String>>,
+	session_env:   Option<HashMap<String, String>>,
 	snapshot_path: Option<String>,
 	/// Path to shell binary (Windows only). When set, bypasses BrushShell.
-	shell_path: Option<String>,
+	shell_path:    Option<String>,
 }
 
 /// Options for configuring a persistent shell session.
 #[napi(object)]
 pub struct ShellOptions {
 	/// Environment variables to apply once per session.
-	pub session_env: Option<HashMap<String, String>>,
+	pub session_env:   Option<HashMap<String, String>>,
 	/// Optional snapshot file to source on session creation.
 	pub snapshot_path: Option<String>,
 	/// Path to shell binary (Windows only). When set, bypasses BrushShell
 	/// and spawns the native shell directly, avoiding PATH resolution issues.
-	pub shell_path: Option<String>,
+	pub shell_path:    Option<String>,
 }
 
 /// Options for running a shell command (internal, lifetime-free).
@@ -75,25 +75,25 @@ struct ShellRunConfig {
 	/// Command string to execute in the shell.
 	command: String,
 	/// Working directory for the command.
-	cwd: Option<String>,
+	cwd:     Option<String>,
 	/// Environment variables to apply for this command only.
-	env: Option<HashMap<String, String>>,
+	env:     Option<HashMap<String, String>>,
 }
 
 /// Options for running a shell command.
 #[napi(object)]
 pub struct ShellRunOptions<'env> {
 	/// Command string to execute in the shell.
-	pub command: String,
+	pub command:    String,
 	/// Working directory for the command.
-	pub cwd: Option<String>,
+	pub cwd:        Option<String>,
 	/// Environment variables to apply for this command only.
-	pub env: Option<HashMap<String, String>>,
+	pub env:        Option<HashMap<String, String>>,
 	/// Timeout in milliseconds before cancelling the command.
 	#[napi(js_name = "timeoutMs")]
 	pub timeout_ms: Option<u32>,
 	/// Abort signal for cancelling the operation.
-	pub signal: Option<Unknown<'env>>,
+	pub signal:     Option<Unknown<'env>>,
 }
 
 /// Result of running a shell command.
@@ -111,7 +111,7 @@ pub struct ShellRunResult {
 #[napi]
 pub struct Shell {
 	session: Arc<TokioMutex<Option<ShellSessionCore>>>,
-	config: ShellConfig,
+	config:  ShellConfig,
 }
 
 #[napi]
@@ -124,9 +124,9 @@ impl Shell {
 		let config = options.map_or_else(
 			|| ShellConfig { session_env: None, snapshot_path: None, shell_path: None },
 			|opt| ShellConfig {
-				session_env: opt.session_env,
+				session_env:   opt.session_env,
 				snapshot_path: opt.snapshot_path,
-				shell_path: opt.shell_path,
+				shell_path:    opt.shell_path,
 			},
 		);
 		Self { session: Arc::new(TokioMutex::new(None)), config }
@@ -230,24 +230,24 @@ async fn run_shell_session(
 #[napi(object)]
 pub struct ShellExecuteOptions<'env> {
 	/// Command string to execute in the shell.
-	pub command: String,
+	pub command:       String,
 	/// Working directory for the command.
-	pub cwd: Option<String>,
+	pub cwd:           Option<String>,
 	/// Environment variables to apply for this command only.
-	pub env: Option<HashMap<String, String>>,
+	pub env:           Option<HashMap<String, String>>,
 	/// Environment variables to apply once per session.
-	pub session_env: Option<HashMap<String, String>>,
+	pub session_env:   Option<HashMap<String, String>>,
 	/// Timeout in milliseconds before cancelling the command.
 	#[napi(js_name = "timeoutMs")]
-	pub timeout_ms: Option<u32>,
+	pub timeout_ms:    Option<u32>,
 	/// Optional snapshot file to source on session creation.
 	#[napi(js_name = "snapshotPath")]
 	pub snapshot_path: Option<String>,
 	/// Path to shell binary (Windows only). When set, bypasses BrushShell.
 	#[napi(js_name = "shellPath")]
-	pub shell_path: Option<String>,
+	pub shell_path:    Option<String>,
 	/// Abort signal for cancelling the operation.
-	pub signal: Option<Unknown<'env>>,
+	pub signal:        Option<Unknown<'env>>,
 }
 
 /// Result of executing a shell command via brush-core.
@@ -275,11 +275,12 @@ pub fn execute_shell<'env>(
 	>,
 ) -> Result<PromiseRaw<'env, ShellExecuteResult>> {
 	let config = ShellConfig {
-		session_env: options.session_env,
+		session_env:   options.session_env,
 		snapshot_path: options.snapshot_path,
-		shell_path: options.shell_path,
+		shell_path:    options.shell_path,
 	};
-	let run_config = ShellRunConfig { command: options.command, cwd: options.cwd, env: options.env };
+	let run_config =
+		ShellRunConfig { command: options.command, cwd: options.cwd, env: options.env };
 	let ct = task::CancelToken::new(options.timeout_ms, options.signal);
 	task::future(env, "shell.execute", async move {
 		run_shell_oneshot(config, run_config, on_chunk, ct).await
@@ -824,7 +825,7 @@ struct TimeoutCommand {
 	#[arg(required = true)]
 	duration: String,
 	#[arg(required = true, num_args = 1.., trailing_var_arg = true)]
-	command: Vec<String>,
+	command:  Vec<String>,
 }
 
 impl builtins::Command for TimeoutCommand {
