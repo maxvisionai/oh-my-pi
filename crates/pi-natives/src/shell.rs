@@ -57,7 +57,7 @@ struct ShellConfig {
 	session_env:   Option<HashMap<String, String>>,
 	snapshot_path: Option<String>,
 	/// Path to shell binary (Windows only). When set, bypasses `BrushShell`.
-	#[cfg_attr(not(windows), allow(dead_code))]
+	#[cfg_attr(not(windows), expect(dead_code, reason = "only used on Windows"))]
 	shell_path:    Option<String>,
 }
 
